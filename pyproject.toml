@@ -1,0 +1,19 @@
+[project]
+name = "voice-detect-bot"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "yakinikusun", email = "secret@example.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "discord-py>=2.7.1",
+    "dotenv>=0.9.9",
+]
+
+[project.scripts]
+voice-detect-bot = "voice_detect_bot.main_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.12.24,<0.13.0"]
+build-backend = "uv_build"
