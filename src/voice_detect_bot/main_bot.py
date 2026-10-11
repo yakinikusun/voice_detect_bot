@@ -29,36 +29,38 @@ def main():
     @client.event
     async def on_voice_state_update(member, before, after):
         global voice_channel
-        global CHANNEL_ID
-        print(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
 
-        # Bot自身を含むBotの入退出は無視する
-        if member.bot:
+        # print(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
+
+        # 対象チャンネル以外のイベントは無視する
+        if (before.channel is not None and before.channel.id != CHANNEL_ID) and (after.channel is not None and after.channel.id != CHANNEL_ID):
             return
 
-        # 同じチャンネル内でのミュート変更などは無視する
-        if before.channel == after.channel:
+        # 同じチャンネル内でのイベントとBotの入退出は無視する
+        if before.channel == after.channel or member.bot:
             return
 
+        # 対象チャンネルに参加した場合の処理
         if after.channel is not None and after.channel.id == CHANNEL_ID:
-            # 対象チャンネルに参加した場合
-            voice_channel = after.channel
-
+            print(f'{member.name} joined the voice channel: {after.channel}')
+            
             # すでに接続している場合は何もしない
             if after.channel.guild.voice_client is None:
+                voice_channel = after.channel
                 await after.channel.connect(cls=VoiceRecvClient)
             return
+        
+        # 対象チャンネルから退出した場合の処理
+        elif before.channel is not None and before.channel.id == CHANNEL_ID:
+            print(f'{member.name} left the voice channel: {before.channel}')
 
-        if before.channel is None or before.channel.id != CHANNEL_ID:
-            return
-
-        # Bot以外のメンバーが誰もいない場合は切断する
-        if any(not channel_member.bot for channel_member in before.channel.members):
-            return
-
-        voice_client = before.channel.guild.voice_client
-        if voice_client is not None and voice_client.channel == before.channel:
-            await voice_client.disconnect()
+            # Bot以外のユーザーがまだチャンネルに残っている場合は何もしない
+            if any(not channel_member.bot for channel_member in before.channel.members):
+                return
+            
+            voice_client = before.channel.guild.voice_client
+            if voice_client is not None:
+                await voice_client.disconnect()
             voice_channel = None
 
     client.run(os.getenv('TOKEN'))
