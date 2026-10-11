@@ -48,7 +48,7 @@ async def sync_voice(guild: discord.Guild):
                 # 誰かがいる場合は、botを接続する
                 if vc is None:
                     logger.info(f'Connecting to {channel}') # 接続されていない場合は接続する
-                    vc = await channel.connect(cls=VoiceRecvClient)
+                    vc = await channel.connect(self_mute=True, cls=VoiceRecvClient)
                     # ここで vc.listen(sink) や worker の起動を行う
                 elif vc.channel.id != channel.id:
                     logger.info(f'Moving bot to {channel}') # 別のチャンネルにいる場合は移動する
@@ -107,6 +107,7 @@ def main():
     async def on_voice_state_update(member, before, after):
         logger.debug(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
 
+        # Botのスピーカーミュート状態が変化した場合の処理
         if member.id == client.user.id and before.deaf != after.deaf:
             await on_bot_deaf_changed(member.guild, after.deaf)
 
