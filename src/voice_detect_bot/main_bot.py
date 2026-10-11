@@ -1,8 +1,11 @@
 import os
+import asyncio
 import logging
-import discord
-from discord.ext.voice_recv import VoiceRecvClient
 from dotenv import load_dotenv
+
+import discord
+from discord.ext import tasks
+from discord.ext.voice_recv import VoiceRecvClient
 
 load_dotenv()
 
@@ -21,6 +24,40 @@ logger.addHandler(handler)
 voice_channel = None
 CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 
+# connect / move / disconnect を直列化する(同時に複数のconnectが走るのを防ぐ)
+_voice_lock = asyncio.Lock()
+ 
+ 
+async def sync_voice(guild: discord.Guild):
+    """対象チャンネルに人間がいるかどうかに合わせて、botの接続状態を揃える。
+    何度呼んでも安全(冪等)。"""
+    channel = guild.get_channel(CHANNEL_ID)
+    if channel is None:
+        return
+ 
+    async with _voice_lock:
+        # ロックを取ってから状態を読む(待っている間に状況が変わるため)
+        has_humans = any(not m.bot for m in channel.members)
+        vc = guild.voice_client
+ 
+        try:
+            if has_humans:
+                if vc is None:
+                    logger.info(f'Connecting to {channel}')
+                    vc = await channel.connect(cls=VoiceRecvClient)
+                    # ここで vc.listen(sink) や worker の起動を行う
+                elif vc.channel.id != channel.id:
+                    logger.info(f'Moving bot to {channel}')
+                    await vc.move_to(channel)
+            elif vc is not None:
+                # 誰もいないなら、どこにいても切断する
+                logger.info(f'Disconnecting from {vc.channel}')
+                await vc.disconnect()
+
+        except (discord.ClientException, discord.Forbidden, asyncio.TimeoutError):
+            logger.exception('Failed to sync voice state')
+
+
 def main():
 
     # Discord BotのIntentsを設定
@@ -33,52 +70,48 @@ def main():
 
     client = discord.Client(intents=intents)
 
+    @tasks.loop(seconds=10)
+    async def voice_watchdog():
+        for guild in client.guilds:
+            await sync_voice(guild)
+ 
+ 
+    @voice_watchdog.before_loop
+    async def _before_watchdog():
+        await client.wait_until_ready()
+ 
+ 
+    @client.event
+    async def on_ready():
+        # 起動時にすでに誰かがいる場合も、watchdogの初回実行で拾われる
+        if not voice_watchdog.is_running():
+            voice_watchdog.start()
+
     # Bot起動時の処理
     @client.event
     async def on_ready():
-        logger.info(f'We have logged in as {client.user.name}')
+        for guild in client.guilds:
+            await sync_voice(guild)
+        logger.info(f'Bot is ready. Logged in as {client.user.name}')
 
     # ボイスチャンネルに参加/退出したときの処理
     @client.event
     async def on_voice_state_update(member, before, after):
-        global voice_channel
+        logger.debug(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
 
-        # logger.debug(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
-
-        # 対象チャンネル以外のイベントは無視する
-        if (before.channel is not None and before.channel.id != CHANNEL_ID) and (after.channel is not None and after.channel.id != CHANNEL_ID):
+        # 同じチャンネル内の変化(ミュート切替など)は無視
+        if before.channel == after.channel:
             return
-
-        # 同じチャンネル内でのイベントとBotの入退出は無視する
-        if before.channel == after.channel or member.bot:
+ 
+        # 対象チャンネルに関係ない移動は無視(botが対象外へ移動された場合はwatchdogが拾う)
+        touched = {c.id for c in (before.channel, after.channel) if c is not None}
+        if CHANNEL_ID not in touched:
             return
-
-        # 対象チャンネルに参加した場合の処理
-        if after.channel is not None and after.channel.id == CHANNEL_ID:
-            logger.info(f'{member.name} joined the voice channel: {after.channel}')
-            
-            voice_client = after.channel.guild.voice_client
-            if voice_client is None:
-                voice_channel = after.channel
-                await after.channel.connect(cls=VoiceRecvClient)
-            elif voice_client.channel is None or voice_client.channel.id != CHANNEL_ID:
-                logger.info(f'Moving bot to the voice channel: {after.channel}')
-                voice_channel = after.channel
-                await voice_client.move_to(after.channel)
-            return
-        
-        # 対象チャンネルから退出した場合の処理
-        elif before.channel is not None and before.channel.id == CHANNEL_ID:
-            logger.info(f'{member.name} left the voice channel: {before.channel}')
-
-            # Bot以外のユーザーがまだチャンネルに残っている場合は何もしない
-            if any(not channel_member.bot for channel_member in before.channel.members):
-                return
-            
-            voice_client = before.channel.guild.voice_client
-            if voice_client is not None:
-                await voice_client.disconnect()
-            voice_channel = None
+ 
+        if member.id == client.user.id:
+            await asyncio.sleep(2) # 動きが早くしすぎないように、botの移動は少し待つ
+ 
+        await sync_voice(member.guild)
 
     client.run(os.getenv('TOKEN'))
 
