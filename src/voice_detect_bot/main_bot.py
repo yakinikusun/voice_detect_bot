@@ -62,6 +62,15 @@ async def sync_voice(guild: discord.Guild):
             logger.exception('Failed to sync voice state')
 
 
+async def on_bot_deaf_changed(guild, deafened: bool):
+    if deafened:
+        logger.warning(f'Bot was deafened in {guild}')
+        # 通知、文字起こしの一時停止など
+    else:
+        logger.info(f'Bot was undeafened in {guild}')
+        # 文字起こしの再開など
+
+
 def main():
 
     # Discord BotのIntentsを設定
@@ -80,7 +89,6 @@ def main():
         for guild in client.guilds:
             await sync_voice(guild)
  
- 
     @voice_watchdog.before_loop
     async def _before_watchdog():
         await client.wait_until_ready()
@@ -98,6 +106,9 @@ def main():
     @client.event
     async def on_voice_state_update(member, before, after):
         logger.debug(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
+
+        if member.id == client.user.id and before.deaf != after.deaf:
+            await on_bot_deaf_changed(member.guild, after.deaf)
 
         # 同じチャンネル内の変化(ミュート切替など)は無視
         if before.channel == after.channel:
