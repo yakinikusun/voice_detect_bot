@@ -3,47 +3,84 @@ import time
 import asyncio
 import logging
 import threading
+import numpy as np
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
 
 import discord
 from discord import app_commands
 from discord.ext import tasks, voice_recv
 from discord.ext.voice_recv import VoiceRecvClient
+from faster_whisper import WhisperModel
 
 
 load_dotenv()
 
-# Loggerの設定
 LOG_FORMAT = "%(asctime)s %(levelname)s     %(filename)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 SILENCE_SEC = 1.0   # この秒数パケットが来なければ「発話終了」とみなす
 MIN_SEC = 0.5       # これより短い音声は捨てる
 MAX_SEC = 30.0      # 長すぎる発話は強制的に区切る
- 
 BYTES_PER_SEC = 48000 * 2 * 2  # 48kHz / 16bit / ステレオ
+MAX_PENDING = 5       # 文字起こし待ちがこれを超えたら、新しい発話は捨てる(遅延の暴走防止)
 
+WATCHDOG_SEC = 30     # 状態を揃え直す保険の間隔
+
+MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")     # Whisperのモデルサイズ
+DEVICE = os.getenv("WHISPER_DEVICE", "cpu")         # Whisperの実行デバイス
+COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE", "int8") # Whisperの計算精度
+
+CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
+NOTIFY_CHANNEL_ID = int(os.getenv('NOTIFY_CHANNEL_ID', 0))
+
+auto_connect = os.getenv('AUTO_CONNECT', 'true').lower() == 'true'
+session = None  # workerのタスク
+
+# Loggerの設定
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.propagate = False
 
 class _IgnoreRtcp(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return "unexpected rtcp packet" not in record.getMessage()
+        return "unexpected rtcp packet" not in record.getMessage() and "payload has extra" not in record.getMessage()
     
 logging.getLogger("discord.ext.voice_recv.reader").addFilter(_IgnoreRtcp())
+logging.getLogger("discord.ext.voice_recv.gateway").addFilter(_IgnoreRtcp())
 
 handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
 logger.addHandler(handler)
 
-auto_connect = os.getenv('AUTO_CONNECT', 'true').lower() == 'true'
-CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
-NOTIFY_CHANNEL_ID = int(os.getenv('NOTIFY_CHANNEL_ID', 0))
-session = None  # workerのタスク
+logger.info(f"Loading model: {MODEL_SIZE} ({DEVICE}, {COMPUTE_TYPE})")
+model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
+executor = ThreadPoolExecutor(max_workers=1)  # モデルへのアクセスは1スレッドに直列化
 
 # connect / move / disconnect を直列化する(同時に複数のconnectが走るのを防ぐ)
 _voice_lock = asyncio.Lock()
+_pending = 0
+_worker_task: asyncio.Task | None = None
+
+# ---------- 音声変換 / 文字起こし / キーワード ----------
+def pcm_to_16k_mono(pcm: bytes) -> np.ndarray:
+    """48kHz/16bit/ステレオ PCM -> 16kHz/モノラル/float32"""
+    pcm = pcm[: len(pcm) // 4 * 4]
+    a = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    a = a.reshape(-1, 2).mean(axis=1)
+    n = len(a) // 3 * 3
+    return a[:n].reshape(-1, 3).mean(axis=1)
+ 
+ 
+def transcribe(audio: np.ndarray) -> str:
+    segments, _ = model.transcribe(
+        audio,
+        language="ja",
+        vad_filter=True,
+        beam_size=5,
+        condition_on_previous_text=False,
+    )
+    return "".join(s.text for s in segments).strip()
 
 # ---------- 音声受信シンク ----------
 class UtteranceSink(voice_recv.AudioSink):
@@ -96,19 +133,72 @@ class UtteranceSink(voice_recv.AudioSink):
             self._last.clear()
             self._members.clear()
 
-async def worker(sink: UtteranceSink):
+
+# ---------- 文字起こしworker ----------
+ 
+ 
+async def safe_send(channel, content: str):
+    """通知の失敗(権限不足など)で本体の処理が止まらないようにする"""
+    if channel is None:
+        return
+    try:
+        await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException:
+        logger.exception("Failed to send notification")
+
+async def handle_utterance(member, started: float, pcm: bytes, notify_channel):
+    global _pending
+    if _pending >= MAX_PENDING:
+        logger.warning("Transcription backlog is full; dropping an utterance")
+        return
+    _pending += 1
+    try:
+        loop = asyncio.get_running_loop()
+        audio = pcm_to_16k_mono(pcm)
+        text = await loop.run_in_executor(executor, transcribe, audio)
+    except Exception:
+        logger.exception("Transcription failed")
+        return
+    finally:
+        _pending -= 1
+ 
+    if not text:
+        return
+ 
+    name = getattr(member, "display_name", str(member))
+    ts = time.strftime("%H:%M:%S", time.localtime(started))
+    line = f"[{ts}] {name}: {text}"
+    logger.info(line)
+
+
+async def worker(sink: UtteranceSink , notify_channel):
     while True:
         await asyncio.sleep(0.3)
         for member, started, pcm in sink.pop_finished():
             if len(pcm) < MIN_SEC * BYTES_PER_SEC:
                 continue
-            logger.info(f'Utterance finished: {member} ({len(pcm)} bytes)')
+            asyncio.create_task(handle_utterance(member, started, pcm, notify_channel))
 
-# ---------- Botの接続状態を人間の有無に合わせて揃える ----------
+def stop_worker():
+    global _worker_task
+    if _worker_task is not None:
+        _worker_task.cancel()
+        _worker_task = None
+
+def start_worker(vc: VoiceRecvClient, notify_channel):
+    global _worker_task
+    stop_worker()  # 古いworkerが残っていても二重にならないようにする
+    sink = UtteranceSink()
+    vc.listen(sink)
+    _worker_task = asyncio.create_task(worker(sink, notify_channel))
+
+# ---------- 自動入退出 ----------
 async def sync_voice(guild: discord.Guild):
     """対象チャンネルに人間がいるかどうかに合わせて、botの接続状態を揃える。
     何度呼んでも安全(冪等)。"""
+
     channel = guild.get_channel(CHANNEL_ID)
+
     if channel is None:
         return
  
@@ -124,27 +214,18 @@ async def sync_voice(guild: discord.Guild):
             if has_humans: 
                 # 誰かがいる場合は、botを接続する
                 if vc is None:
-                    if session:
-                        session.cancel()
-                        session = None
                     logger.info(f'Connecting to {channel}') # 接続されていない場合は接続する
                     vc = await channel.connect(self_mute=True, cls=VoiceRecvClient)
-                    sink = UtteranceSink()
-                    vc.listen(sink)
-                    session = asyncio.create_task(worker(sink))
+                    start_worker(vc, guild.get_channel(NOTIFY_CHANNEL_ID))
 
                 elif vc.channel.id != channel.id:
-                    if session:
-                        session.cancel()
-                        session = None
                     logger.info(f'Moving bot to {channel}') # 別のチャンネルにいる場合は移動する
                     await vc.move_to(channel)
             elif vc is not None:
                 # 誰もいないなら、どこにいても切断する
+                stop_worker()
                 logger.info(f'Disconnecting from {vc.channel}')
-                if session:
-                    session.cancel()
-                    session = None
+                vc.stop_listening()
                 await vc.disconnect()
 
         except (discord.ClientException, discord.Forbidden, asyncio.TimeoutError):
@@ -173,7 +254,7 @@ def main():
     client = discord.Client(intents=intents)
     tree = app_commands.CommandTree(client)
 
-    @tasks.loop(seconds=10)
+    @tasks.loop(seconds=WATCHDOG_SEC)
     async def voice_watchdog():
         for guild in client.guilds:
             await sync_voice(guild)
@@ -231,9 +312,7 @@ def main():
         auto_connect = False
         async with _voice_lock:
             for vc in list(client.voice_clients):
-                if session:
-                    session.cancel()
-                    session = None
+                stop_worker()
                 await vc.disconnect()
         await interaction.response.send_message("Botの監視を停止しました", ephemeral=True)
 

@@ -9,6 +9,8 @@ requires-python = ">=3.10"
 dependencies = [
     "discord-ext-voice-recv>=0.5.2a179",
     "dotenv>=0.9.9",
+    "faster-whisper>=1.2.1",
+    "numpy>=2.2.6",
 ]
 
 [project.scripts]
