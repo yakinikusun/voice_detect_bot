@@ -17,3 +17,6 @@ voice-detect-bot = "voice_detect_bot.main_bot:main"
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+discord-ext-voice-recv = { git = "https://github.com/LeadFreeCandy/discord-ext-voice-recv.git", branch = "dave-decrypt-receive" }
