@@ -6,30 +6,25 @@ import threading
 import numpy as np
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
+import sherpa_onnx
+from huggingface_hub import hf_hub_download
 
 import discord
 from discord import app_commands
 from discord.ext import tasks, voice_recv
 from discord.ext.voice_recv import VoiceRecvClient
-from faster_whisper import WhisperModel
-
 
 load_dotenv()
-
-LOG_FORMAT = "%(asctime)s %(levelname)s     %(filename)s - %(message)s"
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 SILENCE_SEC = 1.0   # この秒数パケットが来なければ「発話終了」とみなす
 MIN_SEC = 0.5       # これより短い音声は捨てる
 MAX_SEC = 30.0      # 長すぎる発話は強制的に区切る
 BYTES_PER_SEC = 48000 * 2 * 2  # 48kHz / 16bit / ステレオ
-MAX_PENDING = 5       # 文字起こし待ちがこれを超えたら、新しい発話は捨てる(遅延の暴走防止)
+MAX_PENDING = 30       # 文字起こし待ちがこれを超えたら、新しい発話は捨てる(遅延の暴走防止)
+WATCHDOG_SEC = 30     # BOTの接続状態を揃え直す保険の間隔
 
-WATCHDOG_SEC = 30     # 状態を揃え直す保険の間隔
-
-MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")     # Whisperのモデルサイズ
-DEVICE = os.getenv("WHISPER_DEVICE", "cpu")         # Whisperの実行デバイス
-COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE", "int8") # Whisperの計算精度
+MODEL_REPO = os.getenv("MODEL_REPO", "reazon-research/reazonspeech-k2-v2")
+NUM_THREADS = int(os.getenv("ASR_THREADS", "2"))  # CPUスレッド数。1コア空けておくと音声受信が安定する
 
 CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 NOTIFY_CHANNEL_ID = int(os.getenv('NOTIFY_CHANNEL_ID', 0))
@@ -38,6 +33,9 @@ auto_connect = os.getenv('AUTO_CONNECT', 'true').lower() == 'true'
 session = None  # workerのタスク
 
 # Loggerの設定
+LOG_FORMAT = "%(asctime)s %(levelname)s     %(filename)s - %(message)s"
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.propagate = False
@@ -53,16 +51,35 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
 logger.addHandler(handler)
 
-logger.info(f"Loading model: {MODEL_SIZE} ({DEVICE}, {COMPUTE_TYPE})")
-model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
-executor = ThreadPoolExecutor(max_workers=1)  # モデルへのアクセスは1スレッドに直列化
+logger.info(f"Loading model: {MODEL_REPO} (threads={NUM_THREADS})")
 
-# connect / move / disconnect を直列化する(同時に複数のconnectが走るのを防ぐ)
-_voice_lock = asyncio.Lock()
-_pending = 0
-_worker_task: asyncio.Task | None = None
+# マルチスレッドでモデルを呼び出すためのexecutorと、音声受信の排他制御用のLock
+executor = ThreadPoolExecutor(max_workers=1)  # モデルへのアクセスは1スレッドに直列化
+_voice_lock = asyncio.Lock()                # 音声受信の開始/停止は1スレッドに直列化
+_worker_task: asyncio.Task | None = None    # 文字起こしworkerのタスク
+_pending = 0                                # 文字起こし待ちの発話数
 
 # ---------- 音声変換 / 文字起こし / キーワード ----------
+
+def _load() -> sherpa_onnx.OfflineRecognizer:
+    def dl(name: str) -> str:
+        # 初回のみダウンロードされ、以降はキャッシュが使われる
+        return hf_hub_download(repo_id=MODEL_REPO, filename=name)
+
+    return sherpa_onnx.OfflineRecognizer.from_transducer(
+        encoder=dl("encoder-epoch-99-avg-1.int8.onnx"),
+        decoder=dl("decoder-epoch-99-avg-1.onnx"),
+        joiner=dl("joiner-epoch-99-avg-1.onnx"),
+        tokens=dl("tokens.txt"),
+        num_threads=NUM_THREADS,
+        sample_rate=16000,
+        feature_dim=80,
+        decoding_method="greedy_search",
+        provider="cpu",
+    )
+
+recognizer = _load()  # 文字起こしモデルのロードは時間がかかるので、最初に1回だけ行う
+
 def pcm_to_16k_mono(pcm: bytes) -> np.ndarray:
     """48kHz/16bit/ステレオ PCM -> 16kHz/モノラル/float32"""
     pcm = pcm[: len(pcm) // 4 * 4]
@@ -70,17 +87,16 @@ def pcm_to_16k_mono(pcm: bytes) -> np.ndarray:
     a = a.reshape(-1, 2).mean(axis=1)
     n = len(a) // 3 * 3
     return a[:n].reshape(-1, 3).mean(axis=1)
- 
+
  
 def transcribe(audio: np.ndarray) -> str:
-    segments, _ = model.transcribe(
-        audio,
-        language="ja",
-        vad_filter=True,
-        beam_size=5,
-        condition_on_previous_text=False,
-    )
-    return "".join(s.text for s in segments).strip()
+    """音声を文字起こしする。音声は16kHz/モノラル/float32であること"""
+    audio = np.ascontiguousarray(audio, dtype=np.float32)
+    stream = recognizer.create_stream()
+    stream.accept_waveform(16000, audio)
+    recognizer.decode_stream(stream)
+    return stream.result.text.strip()
+
 
 # ---------- 音声受信シンク ----------
 class UtteranceSink(voice_recv.AudioSink):
@@ -101,6 +117,7 @@ class UtteranceSink(voice_recv.AudioSink):
         return False  # デコード済みPCMで受け取る
  
     def write(self, user, data: voice_recv.VoiceData):
+        """ユーザーごとにPCMを貯める"""
         if user is None or user.bot or not data.pcm:
             return
         with self._lock:
@@ -127,6 +144,7 @@ class UtteranceSink(voice_recv.AudioSink):
         return out
  
     def cleanup(self):
+        """すべてのバッファを破棄する"""
         with self._lock:
             self._buf.clear()
             self._started.clear()
@@ -135,7 +153,6 @@ class UtteranceSink(voice_recv.AudioSink):
 
 
 # ---------- 文字起こしworker ----------
- 
  
 async def safe_send(channel, content: str):
     """通知の失敗(権限不足など)で本体の処理が止まらないようにする"""
@@ -146,13 +163,15 @@ async def safe_send(channel, content: str):
     except discord.HTTPException:
         logger.exception("Failed to send notification")
 
-async def handle_utterance(member, started: float, pcm: bytes, notify_channel):
+async def handle_utterance(member, started: float, pcm: bytes):
+    """1発話を文字起こしして、通知チャンネルに送る"""
     global _pending
-    if _pending >= MAX_PENDING:
+    if _pending >= MAX_PENDING: # 文字起こし待ちが多すぎる場合は捨てる
         logger.warning("Transcription backlog is full; dropping an utterance")
         return
     _pending += 1
     try:
+        # asyncioのイベントループとは別スレッドで文字起こしを行う
         loop = asyncio.get_running_loop()
         audio = pcm_to_16k_mono(pcm)
         text = await loop.run_in_executor(executor, transcribe, audio)
@@ -170,27 +189,31 @@ async def handle_utterance(member, started: float, pcm: bytes, notify_channel):
     line = f"[{ts}] {name}: {text}"
     logger.info(line)
 
-
-async def worker(sink: UtteranceSink , notify_channel):
+async def worker(sink: UtteranceSink):
+    """音声受信シンクから発話を取り出し、文字起こしする"""
     while True:
         await asyncio.sleep(0.3)
         for member, started, pcm in sink.pop_finished():
             if len(pcm) < MIN_SEC * BYTES_PER_SEC:
                 continue
-            asyncio.create_task(handle_utterance(member, started, pcm, notify_channel))
+            asyncio.create_task(handle_utterance(member, started, pcm))
+
+
+def start_worker(vc: VoiceRecvClient):
+    """文字起こしworkerを開始する"""
+    global _worker_task
+    stop_worker()  # 古いworkerが残っていても二重にならないようにする
+    sink = UtteranceSink()
+    vc.listen(sink)
+    _worker_task = asyncio.create_task(worker(sink))
 
 def stop_worker():
+    """文字起こしworkerを停止する"""
     global _worker_task
     if _worker_task is not None:
         _worker_task.cancel()
         _worker_task = None
 
-def start_worker(vc: VoiceRecvClient, notify_channel):
-    global _worker_task
-    stop_worker()  # 古いworkerが残っていても二重にならないようにする
-    sink = UtteranceSink()
-    vc.listen(sink)
-    _worker_task = asyncio.create_task(worker(sink, notify_channel))
 
 # ---------- 自動入退出 ----------
 async def sync_voice(guild: discord.Guild):
@@ -216,7 +239,7 @@ async def sync_voice(guild: discord.Guild):
                 if vc is None:
                     logger.info(f'Connecting to {channel}') # 接続されていない場合は接続する
                     vc = await channel.connect(self_mute=True, cls=VoiceRecvClient)
-                    start_worker(vc, guild.get_channel(NOTIFY_CHANNEL_ID))
+                    start_worker(vc)
 
                 elif vc.channel.id != channel.id:
                     logger.info(f'Moving bot to {channel}') # 別のチャンネルにいる場合は移動する
@@ -233,11 +256,14 @@ async def sync_voice(guild: discord.Guild):
 
 # ---------- Botのスピーカーミュート状態が変化したときの処理 ----------
 async def on_bot_deaf_changed(guild, deafened: bool):
+    """Botのスピーカーミュート状態が変化したときの処理"""
     if deafened:
         logger.warning(f'Bot was deafened in {guild}')
+        stop_worker()
         # 通知、文字起こしの一時停止など
     else:
         logger.info(f'Bot was undeafened in {guild}')
+        start_worker(guild.voice_client)
         # 文字起こしの再開など
 
 # ---------- Botのメイン処理 ----------
@@ -266,15 +292,16 @@ def main():
  
     @client.event
     async def on_ready():
+        """Botが起動したときの処理"""
         # 起動時にすでに誰かがいる場合も、watchdogの初回実行で拾われる
         if not voice_watchdog.is_running():
             voice_watchdog.start()
         await tree.sync()
         logger.info(f'Bot is ready. Logged in as {client.user.name}')
 
-    # ボイスチャンネルに参加/退出したときの処理
     @client.event
     async def on_voice_state_update(member, before, after):
+        """ボイスチャンネルに参加/退出したときの処理"""
         logger.debug(f'Voice state updated for {member.name}: {before.channel} -> {after.channel}')
 
         # Botのスピーカーミュート状態が変化した場合の処理
@@ -298,6 +325,7 @@ def main():
     @tree.command(name="start_rec", description="Botの監視を開始します")
     @app_commands.default_permissions(administrator=True)
     async def start_rec(interaction: discord.Interaction):
+        """Botの監視を開始する"""
         global auto_connect
         auto_connect = True
         for guild in client.guilds:
@@ -308,6 +336,7 @@ def main():
     @tree.command(name="stop_rec", description="Botの監視を停止します")
     @app_commands.default_permissions(administrator=True)
     async def stop_rec(interaction: discord.Interaction):
+        """Botの監視を停止する"""
         global auto_connect
         auto_connect = False
         async with _voice_lock:
