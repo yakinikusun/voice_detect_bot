@@ -28,6 +28,8 @@ NUM_THREADS = int(os.getenv("ASR_THREADS", "2"))  # CPUスレッド数。1コア
 
 CHANNEL_ID = int(os.getenv('CHANNEL_ID'))
 NOTIFY_CHANNEL_ID = int(os.getenv('NOTIFY_CHANNEL_ID', 0))
+NG_WORDS = os.getenv('NG_WORDS', '').split(',')
+SILENT = os.getenv('SILENT', 'true').lower() == 'true'
 
 auto_connect = os.getenv('AUTO_CONNECT', 'true').lower() == 'true'
 session = None  # workerのタスク
@@ -154,12 +156,20 @@ class UtteranceSink(voice_recv.AudioSink):
 
 # ---------- 文字起こしworker ----------
  
+def detect_keywords(text: str) -> list[str]:
+    """文字起こし結果からキーワードを検出する"""
+    keywords = []
+    for kw in NG_WORDS:
+        if kw in text:
+            keywords.append(kw)
+    return keywords
+
 async def safe_send(channel, content: str):
     """通知の失敗(権限不足など)で本体の処理が止まらないようにする"""
     if channel is None:
         return
     try:
-        await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+        await channel.send(content, allowed_mentions=discord.AllowedMentions.none(),silent=SILENT)
     except discord.HTTPException:
         logger.exception("Failed to send notification")
 
@@ -188,6 +198,15 @@ async def handle_utterance(member, started: float, pcm: bytes):
     ts = time.strftime("%H:%M:%S", time.localtime(started))
     line = f"[{ts}] {name}: {text}"
     logger.info(line)
+
+    # キーワードを検出
+    keywords = detect_keywords(text)
+    if keywords:
+        logger.info(f"Keywords found in {name}'s utterance: {', '.join(keywords)} in {text}")
+        if NOTIFY_CHANNEL_ID:
+            channel = member.guild.get_channel(NOTIFY_CHANNEL_ID)
+            if channel:
+                await safe_send(channel, f"⚠️ キーワード検出: {member.mention}\n検知したワード： `{', '.join(keywords)}`\n全文： `{text}`")
 
 async def worker(sink: UtteranceSink):
     """音声受信シンクから発話を取り出し、文字起こしする"""
