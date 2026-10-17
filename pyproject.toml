@@ -9,6 +9,10 @@ requires-python = ">=3.10"
 dependencies = [
     "discord-ext-voice-recv>=0.5.2a179",
     "dotenv>=0.9.9",
+    "huggingface-hub>=2.2.0",
+    "numpy>=2.2.6",
+    "sherpa-onnx>=1.13.8",
+    "sherpa-onnx-bin>=1.13.8",
 ]
 
 [project.scripts]
@@ -17,3 +21,6 @@ voice-detect-bot = "voice_detect_bot.main_bot:main"
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+discord-ext-voice-recv = { git = "https://github.com/LeadFreeCandy/discord-ext-voice-recv.git", branch = "dave-decrypt-receive" }
