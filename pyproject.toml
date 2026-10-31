@@ -7,13 +7,21 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "discord-py>=2.7.1",
+    "discord-ext-voice-recv>=0.5.2a179",
     "dotenv>=0.9.9",
+    "numpy>=2.2.6",
 ]
 
+[project.optional-dependencies]
+reazon = ["sherpa-onnx", "sherpa-onnx-bin", "huggingface_hub"]
+whisper = ["faster-whisper"]
+
 [project.scripts]
-voice-detect-bot = "voice_detect_bot.main_bot:main"
+voice-detect-bot = "voice_detect_bot.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+discord-ext-voice-recv = { git = "https://github.com/LeadFreeCandy/discord-ext-voice-recv.git", branch = "dave-decrypt-receive" }
