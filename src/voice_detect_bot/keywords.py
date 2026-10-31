@@ -45,7 +45,8 @@ class KeywordDetector:
 
     def detect(self, text: str) -> list[str]:
         """text に含まれるキーワードを元の表記の設定順(重複なし)で返す"""
-        norm_text = normalize(text)
+        # norm_text = normalize(text)
+        norm_text = text  # 正規化しないで検知する
         if not norm_text:
             return []
 

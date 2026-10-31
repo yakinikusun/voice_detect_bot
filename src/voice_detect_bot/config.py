@@ -21,6 +21,7 @@ class Config:
     WATCHDOG_SEC: int = 30
     LOG_FILE: str = "transcript.log"
     ASR_THREADS: int = 2
+    REAZON_MODEL_REPO: str = "reazon-research/reazonspeech-k2-v2"
     WHISPER_MODEL: str = "small"
     WHISPER_DEVICE: str = "cpu"
     WHISPER_COMPUTE: str = "int8"
@@ -69,6 +70,10 @@ class Config:
     @property
     def log_file(self) -> str:
         return self.LOG_FILE
+
+    @property
+    def reason_model_repo(self) -> str:
+        return self.REAZON_MODEL_REPO
 
     @property
     def asr_threads(self) -> int:
@@ -122,6 +127,7 @@ def load_config() -> Config:
     watchdog_sec = int(os.getenv("WATCHDOG_SEC", "30"))
     log_file = os.getenv("LOG_FILE", "transcript.log").strip()
     asr_threads = int(os.getenv("ASR_THREADS", os.getenv("NUM_THREADS", "2")))
+    reason_model_repo = os.getenv("MODEL_REPO", "reazon-research/reazonspeech-k2-v2").strip()
     whisper_model = os.getenv("WHISPER_MODEL", "small").strip()
     whisper_device = os.getenv("WHISPER_DEVICE", "cpu").strip()
     whisper_compute = os.getenv("WHISPER_COMPUTE", "int8").strip()
@@ -142,4 +148,5 @@ def load_config() -> Config:
         WHISPER_MODEL=whisper_model,
         WHISPER_DEVICE=whisper_device,
         WHISPER_COMPUTE=whisper_compute,
+        REAZON_MODEL_REPO=reason_model_repo,
     )
