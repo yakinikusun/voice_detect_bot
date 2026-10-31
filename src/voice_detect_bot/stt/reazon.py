@@ -6,15 +6,14 @@ try:
 except ImportError as e:
     raise ImportError("ReazonSpeech backend requires 'sherpa-onnx' and 'huggingface-hub'") from e
 
-MODEL_REPO = "reazon-research/reazonspeech-k2-v2"
-
-
 class ReazonTranscriber:
     """sherpa-onnx + ReazonSpeech k2 v2 の文字起こしバックエンド"""
 
-    def __init__(self, num_threads: int = 2):
+    def __init__(self, num_threads: int = 2, model_repo: str = "reazon-research/reazonspeech-k2-v2"):
+        self._model_repo = model_repo
+
         def dl(name: str) -> str:
-            return hf_hub_download(repo_id=MODEL_REPO, filename=name)
+            return hf_hub_download(repo_id=self._model_repo, filename=name)
 
         self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
             encoder=dl("encoder-epoch-99-avg-1.int8.onnx"),
