@@ -12,14 +12,16 @@ class Config:
     TOKEN: str
     VOICE_CHANNEL_ID: int
     NOTIFY_CHANNEL_ID: int
-    STT_BACKEND: str  # reazon か whisper
     KEYWORDS: list[str]
+    STT_BACKEND: str  # reazon か whisper
+    CONNECT_NOTIFY: bool = True
+    SILENT_MSG: bool = True
     SILENCE_SEC: float = 1.0
     MIN_SEC: float = 0.5
     MAX_SEC: float = 20.0
     MAX_PENDING: int = 5
     WATCHDOG_SEC: int = 30
-    LOG_FILE: str = "transcript.log"
+    LOG_FILE: str = "detected.log"
     ASR_THREADS: int = 2
     REAZON_MODEL: str = "reazon-research/reazonspeech-k2-v2"
     WHISPER_MODEL: str = "small"
@@ -44,11 +46,14 @@ def load_config() -> Config:
     if not token or not token.strip():
         raise ValueError("環境変数 DISCORD_TOKEN が設定されていません")
 
-    voice_channel_id_raw = os.getenv("VOICE_CHANNEL_ID") or os.getenv("CHANNEL_ID")
+    voice_channel_id_raw = os.getenv("VOICE_CHANNEL_ID")
     voice_channel_id = _parse_int_env("VOICE_CHANNEL_ID", voice_channel_id_raw)
 
     notify_channel_id_raw = os.getenv("NOTIFY_CHANNEL_ID")
     notify_channel_id = _parse_int_env("NOTIFY_CHANNEL_ID", notify_channel_id_raw)
+
+    connect_notify = os.getenv("CONNECT_NOTIFY", "true").strip().lower() == "true"
+    silent_msg = os.getenv("SILENT_MSG", "true").strip().lower() == "true"
 
     keywords_raw = os.getenv("KEYWORDS") or os.getenv("NG_WORDS", "")
     keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
@@ -60,8 +65,8 @@ def load_config() -> Config:
     max_sec = float(os.getenv("MAX_SEC", "20.0"))
     max_pending = int(os.getenv("MAX_PENDING", "5"))
     watchdog_sec = int(os.getenv("WATCHDOG_SEC", "30"))
-    log_file = os.getenv("LOG_FILE", "transcript.log").strip()
-    asr_threads = int(os.getenv("ASR_THREADS", os.getenv("NUM_THREADS", "2")))
+    log_file = os.getenv("LOG_FILE", "detected.log").strip()
+    asr_threads = int(os.getenv("ASR_THREADS","2"))
     reazon_model = os.getenv("REAZON_MODEL", "reazon-research/reazonspeech-k2-v2").strip()
     whisper_model = os.getenv("WHISPER_MODEL", "small").strip()
     whisper_device = os.getenv("WHISPER_DEVICE", "cpu").strip()
@@ -71,6 +76,8 @@ def load_config() -> Config:
         TOKEN=token.strip(),
         VOICE_CHANNEL_ID=voice_channel_id,
         NOTIFY_CHANNEL_ID=notify_channel_id,
+        CONNECT_NOTIFY=connect_notify,
+        SILENT_MSG=silent_msg,
         STT_BACKEND=stt_backend,
         KEYWORDS=keywords,
         SILENCE_SEC=silence_sec,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import os
 
 import discord
 from discord import app_commands
@@ -88,19 +89,44 @@ def build_bot(config: Config, transcriber: Transcriber) -> discord.Client:
     @app_commands.default_permissions(administrator=True)
     async def rec_toggle_command(interaction: discord.Interaction, enabled: app_commands.Choice[str]):
         """自動入退出と監視を一括で切り替えるコマンド"""
+        if not interaction.guild:
+            await interaction.response.send_message("このコマンドはギルド内で実行する必要があります。", ephemeral=True)
+            return
+        
+        guild = interaction.guild
+        notify_channel = guild.get_channel(config.NOTIFY_CHANNEL_ID)
         if enabled.value == "on":
+            await client.change_presence(status=discord.Status.online)
             await voice_manager.set_auto_join(True)
             await interaction.response.send_message(
                 "🔊 自動入退出と音声監視を有効化しました。（人がいる場合に自動接続します）",
                 ephemeral=True,
             )
+            if notify_channel is not None and isinstance(notify_channel, discord.abc.Messageable):
+                try:
+                    await notify_channel.send(
+                        "🔊 自動入退出と音声監視が有効化されました。人がいる場合に自動接続します。",
+                        silent=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    logger.warning("Failed to send notification message to %s", notify_channel)
         else:
+            await client.change_presence(status=discord.Status.do_not_disturb)
             await voice_manager.set_auto_join(False)
             await interaction.response.send_message(
                 "🔇 自動入退出と音声監視を無効化し、ボイスチャンネルから切断・監視を停止しました。",
                 ephemeral=True,
             )
-
+            if notify_channel is not None and isinstance(notify_channel, discord.abc.Messageable):
+                try:
+                    await notify_channel.send(
+                        "🔇 自動入退出と音声監視が無効化されました。ボイスチャンネルから切断・監視を停止します。",
+                        silent=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    logger.warning("Failed to send notification message to %s", notify_channel)
     return client
 
 
@@ -108,6 +134,7 @@ def main() -> None:
     """エントリポイント"""
     config = load_config()
     setup_logging()
+    os.makedirs("logs", exist_ok=True)
 
     logger.info("Initializing STT backend (%s)...", config.STT_BACKEND)
     transcriber = create_transcriber(config)
