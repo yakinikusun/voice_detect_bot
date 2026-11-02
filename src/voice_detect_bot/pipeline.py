@@ -98,12 +98,12 @@ class TranscriptionPipeline:
         name = getattr(utt.member, "display_name", str(utt.member))
         ts = time.strftime("%H:%M:%S", time.localtime(utt.started))
         line = f"[{ts}] {name}: {text}"
-        logger.info(line)
+        logger.debug(line)
 
         # ログファイルへの追記
         # if self._config.LOG_FILE:
         #     try:
-        #         with open(self._config.LOG_FILE, "a", encoding="utf-8") as f:
+        #         with open(f"logs/{self._config.LOG_FILE}", "a", encoding="utf-8") as f:
         #             f.write(line + "\n")
         #     except OSError:
         #         logger.exception("Failed to append to log file: %s", self._config.LOG_FILE)
@@ -111,7 +111,15 @@ class TranscriptionPipeline:
         # キーワード検知
         found_keywords = self._detector.detect(text)
         if found_keywords:
+
             logger.info("Keywords found in %s's utterance: %s in %s", name, ", ".join(found_keywords), text)
+            
+            if self._config.LOG_FILE:
+                try:
+                    with open(f"logs/{self._config.LOG_FILE}", "a", encoding="utf-8") as f:
+                        f.write(f"[DETECTED] ({ts})  【{name}】 says: `{', '.join(found_keywords)}` in `{text}`\n")
+                except OSError:
+                    logger.exception("Failed to append to log file: %s", self._config.LOG_FILE)
             if notify_channel is not None:
                 content = (
                     f"⚠️ キーワード検出: {utt.member.mention}\n"
@@ -128,7 +136,7 @@ class TranscriptionPipeline:
             await channel.send(
                 content,
                 allowed_mentions=discord.AllowedMentions.none(),
-                silent=True,
+                silent=self._config.SILENT_MSG,
             )
         except discord.HTTPException:
             logger.exception("Failed to send notification")

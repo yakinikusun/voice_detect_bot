@@ -26,7 +26,10 @@ def create_transcriber(config: Config) -> Transcriber:
         try:
             from .reazon import ReazonTranscriber
 
-            return ReazonTranscriber(num_threads=config.ASR_THREADS)
+            return ReazonTranscriber(
+                num_threads=config.ASR_THREADS,
+                reazon_model=config.REAZON_MODEL,
+            )
         except ImportError as e:
             raise ImportError(
                 "reazon バックエンドの依存関係が見つかりません。必要なライブラリ(sherpa-onnx, huggingface-hub 等)をインストールしてください。"
@@ -48,4 +51,3 @@ def create_transcriber(config: Config) -> Transcriber:
 
     else:
         raise ValueError(f"未知の STT バックエンドです: {config.STT_BACKEND}")
-

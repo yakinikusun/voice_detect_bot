@@ -51,7 +51,7 @@ class VoiceManager:
                         new_vc = await channel.connect(self_mute=True, cls=VoiceRecvClient)
                         self._pipeline.start(new_vc, notify_channel)
                         # 入室の告知
-                        if notify_channel is not None and isinstance(notify_channel, discord.abc.Messageable):
+                        if self._config.CONNECT_NOTIFY and notify_channel is not None and isinstance(notify_channel, discord.abc.Messageable):
                             try:
                                 await notify_channel.send(
                                     f"🔊 `{getattr(channel, 'name', channel)}` に接続し、音声の文字起こしを開始しました。",
@@ -138,6 +138,9 @@ class VoiceManager:
         """スピーカーミュートされた/解除されたときの処理"""
         state_str = "スピーカーミュート (Deafened)" if deafened else "スピーカーミュート解除 (Undeafened)"
         logger.warning("Bot deaf state changed in %s: %s", guild.name, state_str)
+
+        bot_state = discord.Status.do_not_disturb if deafened else discord.Status.online
+        await self._bot.change_presence(status=bot_state)
 
         notify_channel = guild.get_channel(self._config.NOTIFY_CHANNEL_ID)
         if notify_channel is not None and isinstance(notify_channel, discord.abc.Messageable):
