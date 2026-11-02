@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
-import os
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -134,7 +134,8 @@ def main() -> None:
     """エントリポイント"""
     config = load_config()
     setup_logging()
-    os.makedirs("logs", exist_ok=True)
+    p = Path("logs")
+    p.mkdir(parents=True, exist_ok=True)
 
     logger.info("Initializing STT backend (%s)...", config.STT_BACKEND)
     transcriber = create_transcriber(config)
