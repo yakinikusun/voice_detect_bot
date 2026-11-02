@@ -64,6 +64,7 @@ def build_bot(config: Config, transcriber: Transcriber) -> discord.Client:
     @client.event
     async def on_ready():
         voice_manager.start_watchdog()
+        await voice_manager.update_presence()
         try:
             await tree.sync()
             logger.info("Application command tree synced")
@@ -95,8 +96,7 @@ def build_bot(config: Config, transcriber: Transcriber) -> discord.Client:
         guild = interaction.guild
         notify_channel = guild.get_channel(config.NOTIFY_CHANNEL_ID)
         if enabled.value == "on":
-            await client.change_presence(status=discord.Status.online)
-            await voice_manager.set_auto_join(True)
+            await voice_manager.set_auto_join(True, guild=guild)
             await interaction.response.send_message(
                 "🔊 自動入退出と音声監視を有効化しました。（人がいる場合に自動接続します）",
                 ephemeral=True,
@@ -111,8 +111,7 @@ def build_bot(config: Config, transcriber: Transcriber) -> discord.Client:
                 except discord.HTTPException:
                     logger.warning("Failed to send notification message to %s", notify_channel)
         else:
-            await client.change_presence(status=discord.Status.do_not_disturb)
-            await voice_manager.set_auto_join(False)
+            await voice_manager.set_auto_join(False, guild=guild)
             await interaction.response.send_message(
                 "🔇 自動入退出と音声監視を無効化し、ボイスチャンネルから切断・監視を停止しました。",
                 ephemeral=True,
