@@ -49,8 +49,8 @@ def load_config() -> Config:
     voice_channel_id_raw = os.getenv("VOICE_CHANNEL_ID")
     voice_channel_id = _parse_int_env("VOICE_CHANNEL_ID", voice_channel_id_raw)
 
-    notify_channel_id_raw = os.getenv("NOTIFY_CHANNEL_ID")
-    notify_channel_id = _parse_int_env("NOTIFY_CHANNEL_ID", notify_channel_id_raw)
+    notify_channel_id_raw = os.getenv("NOTIFY_CHANNEL_ID", None)
+    notify_channel_id = _parse_int_env("NOTIFY_CHANNEL_ID", notify_channel_id_raw) if notify_channel_id_raw else 0
 
     connect_notify = os.getenv("CONNECT_NOTIFY", "true").strip().lower() == "true"
     silent_msg = os.getenv("SILENT_MSG", "true").strip().lower() == "true"
