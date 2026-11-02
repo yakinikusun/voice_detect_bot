@@ -50,10 +50,9 @@ def setup_logging() -> None:
 
 def build_bot(config: Config, transcriber: Transcriber) -> discord.Client:
     """Bot を組み立てる (副作用なし、起動はしない)"""
-    intents = discord.Intents.default()
-    intents.message_content = True
-    intents.members = True
+    intents = discord.Intents.none()
     intents.voice_states = True
+    intents.guilds = True
 
     client = discord.Client(intents=intents)
     tree = app_commands.CommandTree(client)

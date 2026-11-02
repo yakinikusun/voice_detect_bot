@@ -103,7 +103,7 @@ class TranscriptionPipeline:
         # ログファイルへの追記
         # if self._config.LOG_FILE:
         #     try:
-        #         with open(self._config.LOG_FILE, "a", encoding="utf-8") as f:
+        #         with open(f"logs/{self._config.LOG_FILE}", "a", encoding="utf-8") as f:
         #             f.write(line + "\n")
         #     except OSError:
         #         logger.exception("Failed to append to log file: %s", self._config.LOG_FILE)
