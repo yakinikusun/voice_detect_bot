@@ -26,6 +26,23 @@ class VoiceManager:
         self.auto_join_enabled: bool = True
         self._watchdog_task: tasks.Loop | None = None
 
+    async def update_presence(self, guild: discord.Guild | None = None) -> None:
+        """自動入退出とスピーカーミュート状態を考慮してBotのステータスを更新する"""
+        is_deaf = False
+        if guild is not None and guild.me and guild.me.voice:
+            is_deaf = bool(guild.me.voice.deaf or guild.me.voice.self_deaf)
+        elif guild is None:
+            for g in self._bot.guilds:
+                if g.me and g.me.voice and (g.me.voice.deaf or g.me.voice.self_deaf):
+                    is_deaf = True
+                    break
+
+        # 監視が有効かつスピーカーミュートされていない場合のみ online、それ以外は dnd
+        if self.auto_join_enabled and not is_deaf:
+            await self._bot.change_presence(status=discord.Status.online)
+        else:
+            await self._bot.change_presence(status=discord.Status.do_not_disturb)
+
     async def sync_voice(self, guild: discord.Guild) -> None:
         """対象チャンネルの人間の有無に合わせて、botの接続状態を揃える (冪等)"""
         channel = guild.get_channel(self._config.VOICE_CHANNEL_ID)
@@ -71,9 +88,10 @@ class VoiceManager:
             except (discord.ClientException, discord.Forbidden, asyncio.TimeoutError):
                 logger.exception("Failed to sync voice state in guild %s", guild.name)
 
-    async def set_auto_join(self, enabled: bool) -> None:
+    async def set_auto_join(self, enabled: bool, guild: discord.Guild | None = None) -> None:
         """自動入退出の ON/OFF を切り替える"""
         if self.auto_join_enabled == enabled:
+            await self.update_presence(guild)
             return
 
         self.auto_join_enabled = enabled
@@ -87,8 +105,10 @@ class VoiceManager:
                         logger.exception("Failed to disconnect vc during set_auto_join(False)")
         else:
             # sync_voice は内部でロックを取るため、ロックの外から呼ぶ
-            for guild in self._bot.guilds:
-                await self.sync_voice(guild)
+            for g in self._bot.guilds:
+                await self.sync_voice(g)
+
+        await self.update_presence(guild)
 
     def start_watchdog(self) -> None:
         """watchdog_sec ごとに全ギルドへ sync_voice を呼ぶ保険のループを開始する"""
@@ -139,8 +159,7 @@ class VoiceManager:
         state_str = "スピーカーミュート (Deafened)" if deafened else "スピーカーミュート解除 (Undeafened)"
         logger.warning("Bot deaf state changed in %s: %s", guild.name, state_str)
 
-        bot_state = discord.Status.do_not_disturb if deafened else discord.Status.online
-        await self._bot.change_presence(status=bot_state)
+        await self.update_presence(guild)
 
         notify_channel = guild.get_channel(self._config.NOTIFY_CHANNEL_ID)
         if notify_channel is not None and isinstance(notify_channel, discord.abc.Messageable):
@@ -156,4 +175,3 @@ class VoiceManager:
             vc = guild.voice_client
             if vc is not None:
                 self._pipeline.start(vc, notify_channel)
-
