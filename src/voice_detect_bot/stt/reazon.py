@@ -9,11 +9,11 @@ except ImportError as e:
 class ReazonTranscriber:
     """sherpa-onnx + ReazonSpeech k2 v2 の文字起こしバックエンド"""
 
-    def __init__(self, num_threads: int = 2, model_repo: str = "reazon-research/reazonspeech-k2-v2"):
-        self._model_repo = model_repo
+    def __init__(self, num_threads: int = 2, reazon_model: str = "reazon-research/reazonspeech-k2-v2"):
+        self._model = reazon_model
 
         def dl(name: str) -> str:
-            return hf_hub_download(repo_id=self._model_repo, filename=name)
+            return hf_hub_download(repo_id=self._model, filename=name)
 
         self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
             encoder=dl("encoder-epoch-99-avg-1.int8.onnx"),

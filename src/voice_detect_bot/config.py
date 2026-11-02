@@ -21,75 +21,10 @@ class Config:
     WATCHDOG_SEC: int = 30
     LOG_FILE: str = "transcript.log"
     ASR_THREADS: int = 2
-    REAZON_MODEL_REPO: str = "reazon-research/reazonspeech-k2-v2"
+    REAZON_MODEL: str = "reazon-research/reazonspeech-k2-v2"
     WHISPER_MODEL: str = "small"
     WHISPER_DEVICE: str = "cpu"
     WHISPER_COMPUTE: str = "int8"
-
-    # 小文字でのアクセスも可能なようにプロパティを定義 (互換性担保)
-    @property
-    def token(self) -> str:
-        return self.TOKEN
-
-    @property
-    def voice_channel_id(self) -> int:
-        return self.VOICE_CHANNEL_ID
-
-    @property
-    def notify_channel_id(self) -> int:
-        return self.NOTIFY_CHANNEL_ID
-
-    @property
-    def stt_backend(self) -> str:
-        return self.STT_BACKEND
-
-    @property
-    def keywords(self) -> list[str]:
-        return self.KEYWORDS
-
-    @property
-    def silence_sec(self) -> float:
-        return self.SILENCE_SEC
-
-    @property
-    def min_sec(self) -> float:
-        return self.MIN_SEC
-
-    @property
-    def max_sec(self) -> float:
-        return self.MAX_SEC
-
-    @property
-    def max_pending(self) -> int:
-        return self.MAX_PENDING
-
-    @property
-    def watchdog_sec(self) -> int:
-        return self.WATCHDOG_SEC
-
-    @property
-    def log_file(self) -> str:
-        return self.LOG_FILE
-
-    @property
-    def reason_model_repo(self) -> str:
-        return self.REAZON_MODEL_REPO
-
-    @property
-    def asr_threads(self) -> int:
-        return self.ASR_THREADS
-
-    @property
-    def whisper_model(self) -> str:
-        return self.WHISPER_MODEL
-
-    @property
-    def whisper_device(self) -> str:
-        return self.WHISPER_DEVICE
-
-    @property
-    def whisper_compute(self) -> str:
-        return self.WHISPER_COMPUTE
 
 
 def _parse_int_env(name: str, val: str | None) -> int:
@@ -127,7 +62,7 @@ def load_config() -> Config:
     watchdog_sec = int(os.getenv("WATCHDOG_SEC", "30"))
     log_file = os.getenv("LOG_FILE", "transcript.log").strip()
     asr_threads = int(os.getenv("ASR_THREADS", os.getenv("NUM_THREADS", "2")))
-    reason_model_repo = os.getenv("MODEL_REPO", "reazon-research/reazonspeech-k2-v2").strip()
+    reazon_model = os.getenv("REAZON_MODEL", "reazon-research/reazonspeech-k2-v2").strip()
     whisper_model = os.getenv("WHISPER_MODEL", "small").strip()
     whisper_device = os.getenv("WHISPER_DEVICE", "cpu").strip()
     whisper_compute = os.getenv("WHISPER_COMPUTE", "int8").strip()
@@ -148,5 +83,5 @@ def load_config() -> Config:
         WHISPER_MODEL=whisper_model,
         WHISPER_DEVICE=whisper_device,
         WHISPER_COMPUTE=whisper_compute,
-        REAZON_MODEL_REPO=reason_model_repo,
+        REAZON_MODEL=reazon_model,
     )
