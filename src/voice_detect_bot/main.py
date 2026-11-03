@@ -94,7 +94,13 @@ def build_bot(config: Config, transcriber: Transcriber) -> discord.Client:
             return
         
         guild = interaction.guild
-        notify_channel = guild.get_channel(config.NOTIFY_CHANNEL_ID)
+
+        if guild.get_channel(config.VOICE_CHANNEL_ID) is None:
+            await interaction.response.send_message("監視対象ボイスチャンネルが見つかりません。", ephemeral=True)
+            return
+
+        notify_channel = guild.get_channel(config.  NOTIFY_CHANNEL_ID)
+
         if enabled.value == "on":
             await voice_manager.set_auto_join(True, guild=guild)
             await interaction.response.send_message(
